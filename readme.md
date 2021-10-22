@@ -1,4 +1,4 @@
-# Offline-Reverse-Image-Search
+# Offline Reverse Image Search
 
 ## Overview
 
