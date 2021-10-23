@@ -35,7 +35,7 @@
       <property name="currentIndex">
        <number>0</number>
       </property>
-      <widget class="QWidget" name="tab">
+      <widget class="QWidget" name="tab1">
        <property name="acceptDrops">
         <bool>true</bool>
        </property>
@@ -187,7 +187,7 @@
         </item>
        </layout>
       </widget>
-      <widget class="QWidget" name="tab_2">
+      <widget class="QWidget" name="tab2">
        <attribute name="title">
         <string>Settings - Index</string>
        </attribute>
