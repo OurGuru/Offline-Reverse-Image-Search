@@ -12,6 +12,8 @@ On the left you can see the given image *(for the example it's slightly differen
 
 <img src="https://user-images.githubusercontent.com/47922937/138560831-033acbf8-722b-493b-ad6e-927c5a90f69e.JPG" width="50%">
 
+- You can also drag n drop an image from browser! (Firefox / Chrome tested)
+
 
 ## Dependencies
 
