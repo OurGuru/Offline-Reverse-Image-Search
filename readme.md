@@ -14,6 +14,13 @@ This app finds duplicate to near duplicate images by generating a hash value for
 ## Online Examples
 Online examples of this are [Google images](https://images.google.com/) & [TinEye](https://tineye.com/) which return near duplicate results from images they indexed across the web
 
+## App UI & example
+On the left you can see the given image *(for the example it's slightly different from the original)* and on the right the result
+
+<img src="https://user-images.githubusercontent.com/47922937/138560831-033acbf8-722b-493b-ad6e-927c5a90f69e.JPG" width="50%">
+
+- You can also drag n drop an image from browser! (Firefox / Chrome tested)
+
 
 ## Dependencies
 
