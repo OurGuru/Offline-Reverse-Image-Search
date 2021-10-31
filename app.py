@@ -74,9 +74,6 @@ class IndexWorker(QtCore.QObject):
         print('done2')
 
 
-
-
-
 class MyWindow(QMainWindow):
     def __init__(self):
         super(MyWindow, self).__init__()
