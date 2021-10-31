@@ -200,7 +200,7 @@ class MyWindow(QMainWindow):
         self.SearchRange.setGeometry(QtCore.QRect(100, 110, 42, 22))
         self.SearchRange.setObjectName("SearchRange")
         self.label_9 = QLabel(self.tab2)
-        self.label_9.setGeometry(QtCore.QRect(150, 110, 191, 21))
+        self.label_9.setGeometry(QtCore.QRect(150, 110, 210, 21))
         self.label_9.setObjectName("label_9")
         self.OnTopCheck = QCheckBox(self.tab2)
         self.OnTopCheck.setGeometry(QtCore.QRect(680, 155, 91, 17))
