@@ -1,8 +1,7 @@
 numpy==1.21.1
 imutils==0.5.3
 requests==2.25.1
-playsound==1.2.2
+chime==0.6.0 
 opencv_python==4.4.0.46
 vptree==1.2
-beautifulsoup4==4.10.0
 PyQt6==6.2.0

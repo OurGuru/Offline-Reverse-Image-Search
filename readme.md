@@ -4,6 +4,13 @@
 
 This app finds duplicate to near duplicate images by generating a hash value for each image stored with a specialized data structure called VP-Tree which makes searching an image on a dataset of 100Ks almost instantanious
 
+## Updates
+
+1st update:
+* Deprecated .ui file
+* Added "always on top" on settings 
+* Decreased possible crashes on drag n drop 
+
 ## Online Examples
 Online examples of this are [Google images](https://images.google.com/) & [TinEye](https://tineye.com/) which return near duplicate results from images they indexed across the web
 
