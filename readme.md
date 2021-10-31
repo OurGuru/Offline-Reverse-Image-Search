@@ -7,7 +7,7 @@ This app finds duplicate to near duplicate images by generating a hash value for
 ## Updates
 
 1st update:
-* Deprecated .ui file
+* Deprecated .ui & success.wav file
 * Added "always on top" on settings 
 * Decreased possible crashes on drag n drop 
 
