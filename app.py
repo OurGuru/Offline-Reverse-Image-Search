@@ -410,6 +410,7 @@ class MyWindow(QMainWindow):
         global d
         global current
         global file_path
+        self.ClearImg()
         if event.mimeData().html():
             with open(dir_path+'testfile.jpg', 'wb') as f:
                 f.write(requestsGet(findall('src="http.*.jpg|png"',event.mimeData().html())[0][5:]).content)
