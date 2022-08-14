@@ -6,6 +6,12 @@ This app finds duplicate to near duplicate images by generating a hash value for
 
 ## Updates
 
+2nd update:
+* Replaced OpenCV with Pillow
+* Various Small Fixes to prevent crashing
+* Added Progress bar
+* Added Splash Logo (with more UI Plans on future updates) Thanks to [Creative Force](https://www.facebook.com/creativethunder.eu)
+
 1st update:
 * Deprecated .ui & success.wav file
 * Added "always on top" on settings 
