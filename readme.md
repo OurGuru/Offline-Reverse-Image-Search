@@ -5,6 +5,11 @@
 This app finds duplicate to near duplicate images by generating a hash value for each image stored with a specialized data structure called VP-Tree which makes searching an image on a dataset of 100Ks almost instantanious
 
 ## Updates
+3rd update:
+* Added a log of actions tab
+* Better support for drag n drop
+* Fixed various crashes and better error handling
+* Upgraded the quality of code
 
 2nd update:
 * Replaced OpenCV with Pillow
