@@ -79,7 +79,7 @@ class Worker(QtCore.QObject):
     finished : QtCore.pyqtSignal
         A signal that emits when the search is finished.
     """
-    def __init__(self, images_found, file_path, photo_main, photo_viewer, next_button, previous_button, open_image_button, label_result, label_current, set_image, append_colored_text, display_queue, current):
+    def __init__(self, images_found, file_path, photo_main, photo_viewer, next_button, previous_button, open_image_button, label_result, label_current, set_image, append_colored_text, display_queue, current,settings):
         super().__init__()
         self.images_found = images_found
         self.file_path = file_path
@@ -94,6 +94,7 @@ class Worker(QtCore.QObject):
         self.append_colored_text = append_colored_text
         self.display_queue = display_queue
         self.current = current
+        self.settings = settings
 
     progress = QtCore.pyqtSignal(int)
     finished = QtCore.pyqtSignal()
@@ -195,12 +196,13 @@ class MyWindow(QMainWindow):
     """
     def __init__(self):
         super(MyWindow, self).__init__()
+        self.test_file_ext = ''
         self.current = ''
         self.file_path = ''
         self.dir_path = os.path.join(os.getcwd(), '')
         if not os.path.isfile(self.dir_path+'settings.ini'):
             with open(self.dir_path+'settings.ini', 'w', encoding='utf-8') as f:
-                f.write(f'[General]\nVPTree={self.dir_path}VPtree.pickle\nHashing={self.dir_path}Hashing.pickle\nSearchRange=6')
+                f.write(f'[General]\nVPTree={self.dir_path}VPtree.pickle\nHashing={self.dir_path}Hashing.pickle\nsearch_range=6')
             print('no settings file, created one')
         self.settings = QtCore.QSettings(self.dir_path+'settings.ini', QtCore.QSettings.Format.IniFormat)
         self.images_found = []
@@ -522,10 +524,16 @@ class MyWindow(QMainWindow):
         """
         Creates a worker thread to run the image search
         """
+        # If a thread is already running, stop it
+        if hasattr(self, 'thread') and isinstance(self.thread, QtCore.QThread) and self.thread.isRunning():
+
+            self.thread.quit()
+            self.thread.wait()
+
         #Create a QThread object
         self.thread = QtCore.QThread()
         #Create a worker object
-        self.worker = Worker(self.images_found, self.file_path, self.photo_main, self.photo_viewer, self.next_button, self.previous_button, self.open_image_button, self.label_result, self.label_current, self.set_image, self.append_colored_text, self.display_queue, self.current)
+        self.worker = Worker(self.images_found, self.file_path, self.photo_main, self.photo_viewer, self.next_button, self.previous_button, self.open_image_button, self.label_result, self.label_current, self.set_image, self.append_colored_text, self.display_queue, self.current, self.settings)
         #Move worker to the thread
         self.worker.moveToThread(self.thread)
         #Connect signals and slots
@@ -602,8 +610,8 @@ class MyWindow(QMainWindow):
         self.next_button.setEnabled(False)
         self.previous_button.setEnabled(False)
         self.open_image_button.setEnabled(False)
-        if os.path.isfile(self.dir_path+'testfile.jpg'):
-            os.remove(self.dir_path+'testfile.jpg')
+        if os.path.isfile(f'{self.dir_path}testfile.{self.test_file_ext}'):
+            os.remove(f'{self.dir_path}testfile.{self.test_file_ext}')
 
     def dropEvent(self, event):
         """
@@ -611,7 +619,7 @@ class MyWindow(QMainWindow):
         """
         self.clear_image()
         if event.mimeData().html():
-            url = findall('src="(http.*?\..+?)"', event.mimeData().html())[0]
+            url = findall('src="(http.*?\\..+?)"', event.mimeData().html())[0]
 
             # Download the image file from the URL
             response = requestsGet(url, timeout=15)
@@ -619,10 +627,10 @@ class MyWindow(QMainWindow):
 
             # Open the image file using Pillow to get the file format
             image = Image.open(image_data)
-            file_extension = image.format.lower()
+            self.test_file_ext = image.format.lower()
 
             # Save the image file with the correct file extension
-            file_path = f"{self.dir_path}testfile.{file_extension}"
+            file_path = f"{self.dir_path}testfile.{self.test_file_ext}"
             with open(file_path, 'wb') as file:
                 file.write(response.content)
 
@@ -654,11 +662,23 @@ class MyWindow(QMainWindow):
         """
         self.photo_viewer.setPixmap(QPixmap(path).scaled(self.photo_viewer.width(),self.photo_viewer.height(),QtCore.Qt.AspectRatioMode.KeepAspectRatio,QtCore.Qt.TransformationMode.SmoothTransformation))
 
+    def get_test_file_ext(self):
+        return self.test_file_ext
+
+
 if __name__ == "__main__":
+
     app = QApplication(sys.argv)
     window = MyWindow()
     window.show()
     splash = SplashScreen()
     splash.show()
     app.processEvents()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+
+    if window.get_test_file_ext():
+        try:
+            os.remove(f'{os.getcwd()}\\testfile.{window.test_file_ext}')
+        except FileNotFoundError:
+            pass
+    sys.exit(exit_code)
