@@ -254,8 +254,8 @@ class MyWindow(QMainWindow):
         self.dir_path = os.path.join(os.getcwd(), '')
         if not os.path.isfile(self.dir_path+'settings.ini'):
             with open(self.dir_path+'settings.ini', 'w', encoding='utf-8') as f:
-                vp_tree_path = os.path.join(self.dir_path, 'VPtree.pickle')
-                hashing_path = os.path.join(self.dir_path, 'Hashing.pickle')
+                vp_tree_path = os.path.join(self.dir_path, 'VPtree.pickle').replace('\\', '/')
+                hashing_path = os.path.join(self.dir_path, 'Hashing.pickle').replace('\\', '/')
                 f.write(f'[General]\nVPTree={vp_tree_path}\nHashing={hashing_path}\nsearch_range=6')
             print('no settings file, created one')
         self.settings = QtCore.QSettings(self.dir_path+'settings.ini', QtCore.QSettings.Format.IniFormat)
