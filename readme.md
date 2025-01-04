@@ -5,19 +5,25 @@
 This app finds duplicate to near duplicate images by generating a hash value for each image stored with a specialized data structure called VP-Tree which makes searching an image on a dataset of 100Ks almost instantanious
 
 ## Updates
-3rd update:
+
+0.0.4:
+* Better error handling
+* fixed compatibility with different OS
+* minor bug fixes
+
+0.0.3:
 * Added a log of actions tab
 * Better support for drag n drop
 * Fixed various crashes and better error handling
 * Upgraded the quality of code
 
-2nd update:
+0.0.2:
 * Replaced OpenCV with Pillow
 * Various Small Fixes to prevent crashing
 * Added Progress bar
 * Added Splash Logo (with more UI Plans on future updates) Thanks to [Creative Force](https://www.facebook.com/creativethunder.eu)
 
-1st update:
+0.0.1:
 * Deprecated .ui & success.wav file
 * Added "always on top" on settings 
 * Decreased possible crashes on drag n drop 
