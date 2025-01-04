@@ -11,9 +11,8 @@ from io import BytesIO
 from datetime import datetime
 import subprocess
 from PyQt6 import QtCore, QtGui
-from PyQt6.QtWidgets import QFileDialog, QApplication, QMainWindow,QWidget,QGridLayout,QTabWidget, QPushButton,QLabel,QLineEdit,QSpinBox,QCheckBox,QSplashScreen,QTextEdit
+from PyQt6.QtWidgets import QFileDialog, QApplication, QMainWindow,QWidget,QGridLayout,QTabWidget, QPushButton,QLabel,QLineEdit,QSpinBox,QCheckBox,QSplashScreen,QTextEdit, QProgressBar
 from PyQt6.QtGui import QPixmap, QIcon
-from PyQt6.QtWidgets import QProgressBar
 from requests import get as requestsGet
 from chime import success as SuccessSound
 from chime import info as ErrorSound
@@ -196,10 +195,11 @@ class Worker(QtCore.QObject):
         self.open_image_button.setEnabled(True)
         self.display_queue.clear()
         self.display_queue.extend(self.images_found)
-        self.current = self.display_queue[0]
+        if self.display_queue:
+            self.current = self.display_queue[0]
+            self.label_current.setText(f'Current {self.images_found.index(self.current) + 1}/{len(self.images_found)}')
+            self.set_image(self.current)
         self.label_result.setText(f'Total results : {len(self.images_found)}')
-        self.label_current.setText(f'Current {self.images_found.index(self.current) + 1}/{len(self.images_found)}')
-        self.set_image(self.current)
         logging.info('Links of found images:')
         for image_link in self.images_found:
             logging.info(image_link)
@@ -387,13 +387,14 @@ class MyWindow(QMainWindow):
         self.search_range_label.setGeometry(QtCore.QRect(10, 110, 80, 21))
         self.search_range_label.setObjectName("search_range_label")
         self.search_range = QSpinBox(self.tab2)
-        self.search_range.setGeometry(QtCore.QRect(100, 110, 42, 22))
+        self.search_range.setGeometry(QtCore.QRect(100, 110, 60, 22))
+        self.search_range.setFixedSize(60, 22)
         self.search_range.setObjectName("search_range")
         self.default_range_value_label = QLabel("Default: 6",self.tab2)
-        self.default_range_value_label.setGeometry(QtCore.QRect(150, 110, 210, 21))
+        self.default_range_value_label.setGeometry(QtCore.QRect(180, 110, 210, 21))
         self.default_range_value_label.setObjectName("default_range_value_label")
         self.on_top_check = QCheckBox("Always On Top",self.tab2)
-        self.on_top_check.setGeometry(QtCore.QRect(680, 155, 91, 17))
+        self.on_top_check.setGeometry(QtCore.QRect(680, 155, 100, 17))
         self.on_top_check.setObjectName("OnTopCheck")
         self.tab_widget.addTab(self.tab2, "Settings - Index")
         self.grid_layout_4.addWidget(self.tab_widget, 0, 0, 1, 1)
@@ -490,7 +491,7 @@ class MyWindow(QMainWindow):
         #Move worker to the thread
         self.worker.moveToThread(self.thread)
         #: Connect signals and slots
-        self.thread.started.connect(lambda: self.image_indexer(self.worker))
+        self.thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
@@ -506,7 +507,7 @@ class MyWindow(QMainWindow):
         if dialog:
             self.index_directory.setText(dialog)
 
-    def image_indexer(self, worker) -> None:
+    def image_indexer(self) -> None:
         """
         Indexes all images in a folder and creates a VP-Tree
         """
@@ -530,7 +531,7 @@ class MyWindow(QMainWindow):
                 # Load the input image
                 self.index_status.setText(f"processing image {i+1}/{len(image_paths)}")
                 if len(image_paths) > 0:
-                    worker.progress.emit(((i+1)/len(image_paths))*100)
+                    self.worker.progress.emit(((i+1)/len(image_paths))*100)
                 # Compute the hash for the image and convert it
                 h = dhash(image_path)
                 h = convert_hash(h)
