@@ -13,7 +13,7 @@ import subprocess
 from PyQt6 import QtCore, QtGui
 from PyQt6.QtWidgets import QFileDialog, QApplication, QMainWindow,QWidget,QGridLayout,QTabWidget, QPushButton,QLabel,QLineEdit,QSpinBox,QCheckBox,QSplashScreen,QTextEdit, QProgressBar
 from PyQt6.QtGui import QPixmap, QIcon
-from requests import get as requestsGet
+from requests import get as requestsGet, exceptions as RequestExceptions
 from chime import success as SuccessSound
 from chime import info as ErrorSound
 from PIL import Image
@@ -258,16 +258,21 @@ class MyWindow(QMainWindow):
         self.test_file_ext = ''
         self.current = ''
         self.file_path = ''
-        self.dir_path = os.path.join(os.getcwd(), '')
-        if not os.path.isfile(self.dir_path+'settings.ini'):
-            with open(self.dir_path+'settings.ini', 'w', encoding='utf-8') as f:
-                vp_tree_path = os.path.join(self.dir_path, 'VPtree.pickle').replace('\\', '/')
-                hashing_path = os.path.join(self.dir_path, 'Hashing.pickle').replace('\\', '/')
+        self.dir_path = os.getcwd()
+        settings_path = os.path.join(self.dir_path, 'settings.ini')
+        if not os.path.isfile(settings_path):
+            with open(settings_path, 'w', encoding='utf-8') as f:
+                vp_tree_path = os.path.join(self.dir_path, 'VPtree.pickle')
+                hashing_path = os.path.join(self.dir_path, 'Hashing.pickle')
+                # Convert to forward slashes for INI file compatibility
+                vp_tree_path = vp_tree_path.replace(os.sep, '/')
+                hashing_path = hashing_path.replace(os.sep, '/')
                 f.write(f'[General]\nVPTree={vp_tree_path}\nHashing={hashing_path}\nsearch_range=6')
             print('no settings file, created one')
-        self.settings = QtCore.QSettings(self.dir_path+'settings.ini', QtCore.QSettings.Format.IniFormat)
+        self.settings = QtCore.QSettings(settings_path, QtCore.QSettings.Format.IniFormat)
         self.images_found = []
         self.display_queue=deque()
+        self.is_processing = False  # Flag to prevent multiple simultaneous drops
         #Last UI Configs & connect UI buttons to functions
         self.setObjectName("Offline")
         self.setWindowTitle("Offline Reverse Image Search")
@@ -594,16 +599,23 @@ class MyWindow(QMainWindow):
         Creates a worker thread to run the image search
         """
         # If a thread is already running, stop it
-        if hasattr(self, 'thread'):
+        if hasattr(self, 'thread') and self.thread is not None:
             try:
-                if isinstance(self.thread, QtCore.QThread) and self.thread.isRunning():
+                if self.thread.isRunning():
+                    # Request the thread to stop and wait for it
+                    self.thread.requestInterruption()
                     self.thread.quit()
-                    self.thread.wait()
+                    if not self.thread.wait(5000):  # Wait up to 5 seconds
+                        self.thread.terminate()  # Force terminate if it doesn't stop
+                        self.thread.wait()
             except RuntimeError:
                 # The thread was already deleted, so we can ignore this error
                 pass
             finally:
-                self.thread = None  # Clear the reference to the old thread
+                # Clean up old worker and thread references
+                if hasattr(self, 'worker'):
+                    self.worker = None
+                self.thread = None
 
         #Create a QThread object
         self.thread = QtCore.QThread()
@@ -616,6 +628,11 @@ class MyWindow(QMainWindow):
         self.worker.finished.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
+        # Clean up references when thread is done
+        self.thread.finished.connect(lambda: setattr(self, 'thread', None))
+        self.worker.finished.connect(lambda: setattr(self, 'worker', None))
+        # Reset processing flag when worker finishes
+        self.worker.finished.connect(lambda: setattr(self, 'is_processing', False))
         #Start the thread
         self.thread.start()
 
@@ -637,19 +654,19 @@ class MyWindow(QMainWindow):
             ErrorSound()
             return
 
-        matches = findall(r'\A.*\\', self.current)
-        if matches:
-            x = matches[0]
-
+        # Get the directory containing the current image
+        if os.path.isfile(self.current):
+            directory = os.path.dirname(self.current)
+            
             # Open the directory in the file explorer based on the OS
             if sys.platform.startswith('win'):
-                subprocess.Popen(["explorer", x])
+                subprocess.Popen(["explorer", directory])
             elif sys.platform.startswith('darwin'):
-                subprocess.Popen(["open", x])
+                subprocess.Popen(["open", directory])
             else:
-                subprocess.Popen(["xdg-open", x])
+                subprocess.Popen(["xdg-open", directory])
         else:
-            self.append_colored_text("[ERROR] No directory found in the path", QtGui.QColor("red"))
+            self.append_colored_text("[ERROR] Invalid file path", QtGui.QColor("red"))
             ErrorSound()
 
     def previous(self) -> None:
@@ -700,13 +717,24 @@ class MyWindow(QMainWindow):
         self.next_button.setEnabled(False)
         self.previous_button.setEnabled(False)
         self.open_image_button.setEnabled(False)
-        if os.path.isfile(f'{self.dir_path}testfile.{self.test_file_ext}'):
-            os.remove(f'{self.dir_path}testfile.{self.test_file_ext}')
+        if self.test_file_ext:
+            test_file_path = os.path.join(self.dir_path, f'testfile.{self.test_file_ext}')
+            if os.path.isfile(test_file_path):
+                os.remove(test_file_path)
 
     def dropEvent(self, event: QtGui.QDropEvent):
         """
         Handles the drop event
         """
+        # Check if already processing to prevent race conditions
+        if self.is_processing:
+            self.append_colored_text("[WARNING] Already processing an image, please wait", QtGui.QColor("orange"))
+            event.ignore()
+            return
+        
+        # Set processing flag
+        self.is_processing = True
+        
         print('resetting image.')
         print('current file path:',self.current)
         self.clear_image()
@@ -714,21 +742,53 @@ class MyWindow(QMainWindow):
             url = findall('src="(http.*?\\..+?)"', event.mimeData().html())[0]
             print('url:',url)
 
-            # Download the image file from the URL
-            response = requestsGet(url, timeout=15)
-            image_data = BytesIO(response.content)
+            try:
+                # Download the image file from the URL
+                response = requestsGet(url, timeout=15)
+                response.raise_for_status()  # Raise an exception for bad status codes
+                image_data = BytesIO(response.content)
 
-            # Open the image file using Pillow to get the file format
-            image = Image.open(image_data)
-            self.test_file_ext = image.format.lower()
+                # Open the image file using Pillow to get the file format
+                image = Image.open(image_data)
+                self.test_file_ext = image.format.lower()
 
-            # Save the image file with the correct file extension
-            file_path = f"{self.dir_path}testfile.{self.test_file_ext}"
-            # Set the file path as an instance variable
-            self.file_path = file_path
-            event.accept()
-            logging.info('File path set as instance variable: %s', self.file_path)
-            self.worker_thread()
+                # Save the image file with the correct file extension
+                file_path = os.path.join(self.dir_path, f"testfile.{self.test_file_ext}")
+                # Save the image to disk
+                image.save(file_path)
+                # Set the file path as an instance variable
+                self.file_path = file_path
+                event.accept()
+                logging.info('File path set as instance variable: %s', self.file_path)
+                self.worker_thread()
+            except RequestExceptions.Timeout:
+                self.photo_viewer.setText('Download timeout - URL took too long to respond')
+                self.append_colored_text("[ERROR] Download timeout", QtGui.QColor("red"))
+                ErrorSound()
+                event.ignore()
+                self.is_processing = False  # Reset processing flag
+                return
+            except RequestExceptions.ConnectionError:
+                self.photo_viewer.setText('Connection error - Could not reach URL')
+                self.append_colored_text("[ERROR] Connection error", QtGui.QColor("red"))
+                ErrorSound()
+                event.ignore()
+                self.is_processing = False  # Reset processing flag
+                return
+            except RequestExceptions.HTTPError as e:
+                self.photo_viewer.setText(f'HTTP error: {e}')
+                self.append_colored_text(f"[ERROR] HTTP error: {e}", QtGui.QColor("red"))
+                ErrorSound()
+                event.ignore()
+                self.is_processing = False  # Reset processing flag
+                return
+            except Exception as e:
+                self.photo_viewer.setText('Failed to download image')
+                self.append_colored_text(f"[ERROR] Failed to download image: {str(e)}", QtGui.QColor("red"))
+                ErrorSound()
+                event.ignore()
+                self.is_processing = False  # Reset processing flag
+                return
         try:
             url = event.mimeData().urls()[0].toLocalFile()
         except IndexError:
@@ -736,6 +796,7 @@ class MyWindow(QMainWindow):
             ErrorSound()
             event.ignore()
             self.append_colored_text("[ERROR] No file or image found", QtGui.QColor("red"))
+            self.is_processing = False  # Reset processing flag
             return
 
         if url:
@@ -749,11 +810,13 @@ class MyWindow(QMainWindow):
                 ErrorSound()
                 event.ignore()
                 self.append_colored_text("[ERROR] File format not supported", QtGui.QColor("red"))
+                self.is_processing = False  # Reset processing flag
         else:
             self.photo_viewer.setText('No file or image found')
             ErrorSound()
             event.ignore()
             self.append_colored_text("[ERROR] No file or image found", QtGui.QColor("red"))
+            self.is_processing = False  # Reset processing flag
 
     def set_image(self, path: str) -> None:
         """
@@ -795,13 +858,14 @@ if __name__ == "__main__":
     exit_code = app.exec()
 
     if window.get_test_file_ext():
+        test_file_path = os.path.join(window.dir_path, f'testfile.{window.test_file_ext}')
         try:
-            os.remove(rf'{os.getcwd()}\testfile.{window.test_file_ext}')
+            os.remove(test_file_path)
         except FileNotFoundError:
-            logging.error("File not found: %s", rf'{os.getcwd()}\testfile.{window.test_file_ext}', exc_info=True)
+            logging.error("File not found: %s", test_file_path, exc_info=True)
         except PermissionError:
-            logging.error("Permission denied: %s", rf'{os.getcwd()}\testfile.{window.test_file_ext}', exc_info=True)
+            logging.error("Permission denied: %s", test_file_path, exc_info=True)
         except Exception as e:
-            logging.error("Error deleting file: %s", rf'{os.getcwd()}\testfile.{window.test_file_ext}', exc_info=True)
+            logging.error("Error deleting file: %s", test_file_path, exc_info=True)
             logging.error("Error: %s", str(e))
     sys.exit(exit_code)
