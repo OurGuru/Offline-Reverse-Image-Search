@@ -10,6 +10,7 @@ import base64
 from io import BytesIO
 from datetime import datetime
 import subprocess
+import threading
 from PyQt6 import QtCore, QtGui
 from PyQt6.QtWidgets import QFileDialog, QApplication, QMainWindow,QWidget,QGridLayout,QTabWidget, QPushButton,QLabel,QLineEdit,QSpinBox,QCheckBox,QSplashScreen,QTextEdit, QProgressBar
 from PyQt6.QtGui import QPixmap, QIcon
@@ -86,7 +87,7 @@ class Worker(QtCore.QObject):
     finished : QtCore.pyqtSignal
         A signal that emits when the search is finished.
     """
-    def __init__(self, images_found, file_path, photo_main, photo_viewer, next_button, previous_button, open_image_button, label_result, label_current, set_image, append_colored_text, display_queue, current,settings):
+    def __init__(self, images_found, file_path, photo_main, photo_viewer, next_button, previous_button, open_image_button, label_result, label_current, set_image, append_colored_text, display_queue, current, settings, images_lock, queue_lock, current_lock):
         super().__init__()
         self.images_found = images_found
         self.file_path = file_path
@@ -102,6 +103,10 @@ class Worker(QtCore.QObject):
         self.display_queue = display_queue
         self.current = current
         self.settings = settings
+        # Thread safety locks
+        self.images_lock = images_lock
+        self.queue_lock = queue_lock
+        self.current_lock = current_lock
 
     progress = QtCore.pyqtSignal(int)
     finished = QtCore.pyqtSignal()
@@ -114,7 +119,9 @@ class Worker(QtCore.QObject):
         # window.theEngine()
 
         # self.finished.emit()
-        self.images_found.clear()
+        # Use lock to safely clear images_found
+        with self.images_lock:
+            self.images_found.clear()
 
         #check if the VP-Tree and Hashing files exist
         if not self.settings.value('VPTree') or not self.settings.value('Hashing'):
@@ -136,14 +143,22 @@ class Worker(QtCore.QObject):
             return
 
         #check search_range if it is a valid integer
-        if not self.settings.value('search_range') or not self.settings.value('search_range').isnumeric():
-            error_message = "[ERROR] search_range is not a valid integer"
+        try:
+            search_range_str = str(self.settings.value('search_range', '6'))
+            search_range = int(search_range_str)
+            if search_range < 1 or search_range > 100:
+                raise ValueError("Search range out of bounds")
+        except (ValueError, TypeError):
+            error_message = "[ERROR] search_range is not a valid integer (1-100)"
             self.append_colored_text(error_message, QtGui.QColor("red"))
             ErrorSound()
             self.photo_main.setText('Error')
             return
 
         try:
+            # Add security warning for pickle files
+            self.append_colored_text("[WARNING] Loading pickle files. Only use trusted index files as pickle can execute arbitrary code.", QtGui.QColor("orange"))
+            
             with open(vptree_path, 'rb') as vptree_file:
                 vptree = pickleloads(vptree_file.read())
             with open(hashing_path, 'rb') as hashing_file:
@@ -154,10 +169,32 @@ class Worker(QtCore.QObject):
             ErrorSound()
             self.photo_main.setText('Error')
             return
+        
+        # Check file size before processing
+        try:
+            file_size = os.path.getsize(self.file_path)
+            max_size_mb = 100
+            max_size_bytes = max_size_mb * 1024 * 1024
+            
+            if file_size > max_size_bytes:
+                size_mb = file_size / (1024 * 1024)
+                error_message = f"[ERROR] Search image too large ({size_mb:.2f} MB > {max_size_mb} MB)"
+                self.append_colored_text(error_message, QtGui.QColor("red"))
+                ErrorSound()
+                self.photo_main.setText('File too large')
+                return
+        except Exception as e:
+            error_message = f"[ERROR] Failed to check file size: {str(e)}"
+            self.append_colored_text(error_message, QtGui.QColor("red"))
+            ErrorSound()
+            self.photo_main.setText('Error')
+            return
+            
         query_hash = dhash(self.file_path)
         query_hash = convert_hash(query_hash)
         try:
-            results = vptree.get_all_in_range(query_hash, int(self.settings.value('search_range')))
+            # Use the validated search_range from above
+            results = vptree.get_all_in_range(query_hash, search_range)
         except Exception as e:
             error_message = f"[ERROR] Failed to search index: {str(e)}"
             self.append_colored_text(error_message, QtGui.QColor("red"))
@@ -170,7 +207,8 @@ class Worker(QtCore.QObject):
         for (dist, hsh) in results:
             result_paths = hashes.get(hsh, [])
             for result_path in result_paths:
-                self.images_found.append(result_path)
+                with self.images_lock:
+                    self.images_found.append(result_path)
         try:
             # self.photo_main.setPixmap(QPixmap(self.file_path).scaled(self.photo_main.width(), self.photo_main.height(), QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation))
             if os.path.isfile(self.file_path):
@@ -190,19 +228,25 @@ class Worker(QtCore.QObject):
             self.previous_button.setEnabled(False)
             self.open_image_button.setEnabled(False)
             return
-        if len(self.images_found) > 1:
-            self.next_button.setEnabled(True)
-        self.open_image_button.setEnabled(True)
-        self.display_queue.clear()
-        self.display_queue.extend(self.images_found)
-        if self.display_queue:
-            self.current = self.display_queue[0]
-            self.label_current.setText(f'Current {self.images_found.index(self.current) + 1}/{len(self.images_found)}')
-            self.set_image(self.current)
-        self.label_result.setText(f'Total results : {len(self.images_found)}')
-        logging.info('Links of found images:')
-        for image_link in self.images_found:
-            logging.info(image_link)
+        with self.images_lock:
+            if len(self.images_found) > 1:
+                self.next_button.setEnabled(True)
+            self.open_image_button.setEnabled(True)
+            
+            with self.queue_lock:
+                self.display_queue.clear()
+                self.display_queue.extend(self.images_found)
+                
+                if self.display_queue:
+                    with self.current_lock:
+                        self.current = self.display_queue[0]
+                    self.label_current.setText(f'Current {self.images_found.index(self.current) + 1}/{len(self.images_found)}')
+                    self.set_image(self.current)
+            
+            self.label_result.setText(f'Total results : {len(self.images_found)}')
+            logging.info('Links of found images:')
+            for image_link in self.images_found:
+                logging.info(image_link)
         logging.info('done0')
         self.finished.emit()
 
@@ -273,6 +317,10 @@ class MyWindow(QMainWindow):
         self.images_found = []
         self.display_queue=deque()
         self.is_processing = False  # Flag to prevent multiple simultaneous drops
+        # Thread safety locks
+        self.images_lock = threading.Lock()
+        self.queue_lock = threading.Lock()
+        self.current_lock = threading.Lock()
         #Last UI Configs & connect UI buttons to functions
         self.setObjectName("Offline")
         self.setWindowTitle("Offline Reverse Image Search")
@@ -414,9 +462,7 @@ class MyWindow(QMainWindow):
         self.tab_widget.setCurrentIndex(0)
         QtCore.QMetaObject.connectSlotsByName(self)
         self.connect_signals()
-        self.vp_tree_dir.setText(self.settings.value('VPTree'))
-        self.hash_dir.setText(self.settings.value('Hashing'))
-        self.search_range.setValue(int(self.settings.value('search_range')))
+        self.validate_and_load_settings()
         self.grid_layout_5 = QGridLayout(self.tab3)
         self.grid_layout_5.setObjectName("grid_layout_5")
         self.log_box = QTextEdit(self.tab3)
@@ -429,6 +475,52 @@ class MyWindow(QMainWindow):
         self.log_box_append("Welcome to the Offline Reverse Image Search Tool!")
         self.setCentralWidget(self.central_widget)
         self.setWindowIcon(QIcon(get_app_logo()))
+
+    def validate_and_load_settings(self) -> None:
+        """
+        Validates and loads settings with proper error handling
+        """
+        # Validate VP-Tree path
+        vp_tree_path = self.settings.value('VPTree', '')
+        if vp_tree_path:
+            self.vp_tree_dir.setText(vp_tree_path)
+        else:
+            default_path = os.path.join(self.dir_path, 'VPtree.pickle')
+            self.vp_tree_dir.setText(default_path)
+            self.settings.setValue('VPTree', default_path)
+            self.log_box_append("VP-Tree path not found in settings, using default")
+            
+        # Validate Hashing path
+        hashing_path = self.settings.value('Hashing', '')
+        if hashing_path:
+            self.hash_dir.setText(hashing_path)
+        else:
+            default_path = os.path.join(self.dir_path, 'Hashing.pickle')
+            self.hash_dir.setText(default_path)
+            self.settings.setValue('Hashing', default_path)
+            self.log_box_append("Hashing path not found in settings, using default")
+            
+        # Validate search range
+        try:
+            search_range = self.settings.value('search_range', '6')
+            search_range_int = int(search_range)
+            # Validate range bounds (1-100 seems reasonable)
+            if search_range_int < 1:
+                search_range_int = 1
+                self.log_box_append("Search range too low, setting to minimum (1)")
+            elif search_range_int > 100:
+                search_range_int = 100
+                self.log_box_append("Search range too high, setting to maximum (100)")
+            self.search_range.setValue(search_range_int)
+            self.search_range.setMinimum(1)
+            self.search_range.setMaximum(100)
+        except (ValueError, TypeError):
+            # If conversion fails, use default
+            self.search_range.setValue(6)
+            self.search_range.setMinimum(1)
+            self.search_range.setMaximum(100)
+            self.settings.setValue('search_range', 6)
+            self.log_box_append("Invalid search range in settings, using default (6)")
 
     def connect_signals(self) -> None:
         """
@@ -487,11 +579,34 @@ class MyWindow(QMainWindow):
 
     def save_settings(self) -> None:
         """
-        Saves the settings to the settings file
+        Saves the settings to the settings file with validation
         """
-        self.settings.setValue('VPTree',self.vp_tree_dir.text())
-        self.settings.setValue('Hashing',self.hash_dir.text())
-        self.settings.setValue('search_range',self.search_range.value())
+        # Validate paths before saving
+        vp_tree_path = self.vp_tree_dir.text().strip()
+        hashing_path = self.hash_dir.text().strip()
+        
+        if not vp_tree_path:
+            self.append_colored_text("[ERROR] VP-Tree path cannot be empty", QtGui.QColor("red"))
+            return
+            
+        if not hashing_path:
+            self.append_colored_text("[ERROR] Hashing path cannot be empty", QtGui.QColor("red"))
+            return
+            
+        # Validate that paths have proper extensions
+        if not vp_tree_path.endswith('.pickle'):
+            self.append_colored_text("[WARNING] VP-Tree path should end with .pickle", QtGui.QColor("orange"))
+            
+        if not hashing_path.endswith('.pickle'):
+            self.append_colored_text("[WARNING] Hashing path should end with .pickle", QtGui.QColor("orange"))
+        
+        # Save validated settings
+        self.settings.setValue('VPTree', vp_tree_path)
+        self.settings.setValue('Hashing', hashing_path)
+        self.settings.setValue('search_range', self.search_range.value())
+        
+        self.log_box_append("Settings saved successfully")
+        SuccessSound()
 
     def index_starter(self) -> None:
         """
@@ -538,6 +653,10 @@ class MyWindow(QMainWindow):
 
         self.index_go_button.setEnabled(False)
         self.select_folder_button.setEnabled(False)
+        
+        # Track successful and failed images for accurate progress
+        processed_count = 0
+        failed_count = 0
 
         for (i, image_path) in enumerate(image_paths):
             try:
@@ -545,6 +664,18 @@ class MyWindow(QMainWindow):
                 self.index_status.setText(f"processing image {i+1}/{len(image_paths)}")
                 if len(image_paths) > 0:
                     self.worker.progress.emit(((i+1)/len(image_paths))*100)
+                
+                # Check file size before processing (100MB limit)
+                file_size = os.path.getsize(image_path)
+                max_size_mb = 100
+                max_size_bytes = max_size_mb * 1024 * 1024
+                
+                if file_size > max_size_bytes:
+                    size_mb = file_size / (1024 * 1024)
+                    logging.warning("Skipping large file: %s (%.2f MB)", image_path, size_mb)
+                    self.append_colored_text(f"Skipping {image_path}: File too large ({size_mb:.2f} MB > {max_size_mb} MB)", QtGui.QColor("orange"))
+                    continue
+                
                 # Compute the hash for the image and convert it
                 h = dhash(image_path)
                 h = convert_hash(h)
@@ -552,12 +683,15 @@ class MyWindow(QMainWindow):
                 l = hashes.get(h, [])
                 l.append(image_path)
                 hashes[h] = l
+                processed_count += 1
             except FileNotFoundError:
                 logging.error("File not found: %s", image_path, exc_info=True)
                 self.append_colored_text(f"{image_path} Failed: File not found", QtGui.QColor("red"))
+                failed_count += 1
             except Exception as e:
                 logging.error("Error processing image: %s", image_path, exc_info=True)
                 self.append_colored_text(f"{image_path} Failed: {str(e)}", QtGui.QColor("red"))
+                failed_count += 1
 
         if not hashes:
             self.index_status.setText("No Images found in folder")
@@ -569,6 +703,7 @@ class MyWindow(QMainWindow):
             return
         # Load & add existing hashes/dirs
         if os.path.isfile(self.hash_dir.text()):
+            self.append_colored_text("[WARNING] Loading existing pickle index. Only use trusted index files as pickle can execute arbitrary code.", QtGui.QColor("orange"))
             with open(self.hash_dir.text(), "rb") as hash_file:
                 hashes.update(pickleloads(hash_file.read()))
         else:
@@ -585,8 +720,15 @@ class MyWindow(QMainWindow):
             vp_tree_file.write(pickledumps(tree))
         with open(self.hash_dir.text(), 'wb') as hashes_file:
             hashes_file.write(pickledumps(hashes))
-        self.log_box_append(f"{len(hashes)} Images Indexed")
-        self.index_status.setText('Finished')
+        # Display accurate results summary
+        total_attempted = processed_count + failed_count
+        if failed_count > 0:
+            self.log_box_append(f"{processed_count} Images Successfully Indexed, {failed_count} Failed (out of {total_attempted} total)")
+            self.append_colored_text(f"[WARNING] {failed_count} images failed to process", QtGui.QColor("orange"))
+        else:
+            self.log_box_append(f"{processed_count} Images Successfully Indexed")
+        
+        self.index_status.setText(f'Finished - {processed_count} indexed, {failed_count} failed')
         if self.play_sound_check.isChecked():
             SuccessSound()
         self.index_go_button.setEnabled(True)
@@ -620,7 +762,14 @@ class MyWindow(QMainWindow):
         #Create a QThread object
         self.thread = QtCore.QThread()
         #Create a worker object
-        self.worker = Worker(self.images_found, self.file_path, self.photo_main, self.photo_viewer, self.next_button, self.previous_button, self.open_image_button, self.label_result, self.label_current, self.set_image, self.append_colored_text, self.display_queue, self.current, self.settings)
+        self.worker = Worker(
+            self.images_found, self.file_path, self.photo_main,
+            self.photo_viewer, self.next_button, self.previous_button,
+            self.open_image_button, self.label_result, self.label_current,
+            self.set_image, self.append_colored_text, self.display_queue,
+            self.current, self.settings, self.images_lock,
+            self.queue_lock, self.current_lock
+        )
         #Move worker to the thread
         self.worker.moveToThread(self.thread)
         #Connect signals and slots
@@ -649,14 +798,17 @@ class MyWindow(QMainWindow):
         """
         Opens the directory of the current image
         """
-        if not self.current:
+        with self.current_lock:
+            current_path = self.current
+            
+        if not current_path:
             self.append_colored_text("[ERROR] No image found", QtGui.QColor("red"))
             ErrorSound()
             return
 
         # Get the directory containing the current image
-        if os.path.isfile(self.current):
-            directory = os.path.dirname(self.current)
+        if os.path.isfile(current_path):
+            directory = os.path.dirname(current_path)
             
             # Open the directory in the file explorer based on the OS
             if sys.platform.startswith('win'):
@@ -673,27 +825,43 @@ class MyWindow(QMainWindow):
         """
         Displays the previous image in the queue
         """
-        self.display_queue.rotate(1)
-        self.current = self.display_queue[0]
-        self.label_current.setText('Current '+str(self.images_found.index(self.current)+1)+'/'+str(len(self.images_found)))
-        self.set_image(self.current)
-        if self.images_found.index(self.current) == 0:
-            self.previous_button.setEnabled(False)
-        elif not self.next_button.isEnabled() and self.images_found.index(self.current) != len(self.images_found):
-            self.next_button.setEnabled(True)
+        with self.queue_lock:
+            self.display_queue.rotate(1)
+            with self.current_lock:
+                self.current = self.display_queue[0]
+            
+            with self.images_lock:
+                current_index = self.images_found.index(self.current)
+                total_images = len(self.images_found)
+                
+            self.label_current.setText(f'Current {current_index + 1}/{total_images}')
+            self.set_image(self.current)
+            
+            if current_index == 0:
+                self.previous_button.setEnabled(False)
+            elif not self.next_button.isEnabled() and current_index != total_images:
+                self.next_button.setEnabled(True)
 
     def next(self) -> None:
         """
         Displays the next image in the queue
         """
-        self.display_queue.rotate(-1)
-        self.current = self.display_queue[0]
-        self.label_current.setText('Current '+str(self.images_found.index(self.current)+1)+'/'+str(len(self.images_found)))
-        self.set_image(self.current)
-        if self.images_found.index(self.current)+1 == len(self.images_found):
-            self.next_button.setEnabled(False)
-        elif not self.previous_button.isEnabled() and self.images_found.index(self.current) != 0:
-            self.previous_button.setEnabled(True)
+        with self.queue_lock:
+            self.display_queue.rotate(-1)
+            with self.current_lock:
+                self.current = self.display_queue[0]
+            
+            with self.images_lock:
+                current_index = self.images_found.index(self.current)
+                total_images = len(self.images_found)
+                
+            self.label_current.setText(f'Current {current_index + 1}/{total_images}')
+            self.set_image(self.current)
+            
+            if current_index + 1 == total_images:
+                self.next_button.setEnabled(False)
+            elif not self.previous_button.isEnabled() and current_index != 0:
+                self.previous_button.setEnabled(True)
 
     def dragMoveEvent(self, event: QtGui.QDragMoveEvent):
         """
