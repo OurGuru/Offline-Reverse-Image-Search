@@ -2,3 +2,33 @@ settings.ini
 VPtree.pickle
 Hashing.pickle
 .venv
+
+# Prevent test files in root directory
+/test_*.py
+/check_*_debug.py
+/populate_*.py
+/update_*_metadata.py
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Cache
+cache/
+.cache/
